@@ -32,7 +32,7 @@ public class EcdhController { // <-- Correction : Plus de implements IEcdhServic
     private final EcdhHandshakeSessionRepository handshakeRepository;
     private final AesKeySessionRepository aesKeyRepository;
 
-    private static final long AES_KEY_TTL_SECONDS = 1800L; // 30 minutes
+    private static final long AES_KEY_TTL_SECONDS = 60L; // pour test, a changer a 1h!!
 
     @Data
     public static class HandshakeRequest {
@@ -63,13 +63,13 @@ public class EcdhController { // <-- Correction : Plus de implements IEcdhServic
                     .orElseThrow(() -> new IllegalStateException("Session handshake introuvable dans Redis"));
 
             byte[] privateKeyBytes = Base64.getDecoder().decode(activeSession.getServerPrivateKeyBase64());
-            KeyFactory kf = KeyFactory.getInstance("EC");
+            KeyFactory kf = KeyFactory.getInstance("EC","BC");
             PrivateKey recoveredPrivateKey = kf.generatePrivate(new PKCS8EncodedKeySpec(privateKeyBytes));
             KeyPair explicitKeyPair = new KeyPair(null, recoveredPrivateKey);
 
             // 4. Suppression immédiate de la clé privée de Redis (On déchire le Post-it)
             handshakeRepository.deleteById(handshakeId);
-            log.debug("Clé privée éphémère détruite de Redis ✅");
+            log.debug("Clé privée éphémère détruite de Redis ");
 
             // 5. Calcul du secret partagé et dérivation en clé AES-256
             byte[] clientPublicKeyBytes = Base64.getDecoder().decode(request.getClientPublicKey());

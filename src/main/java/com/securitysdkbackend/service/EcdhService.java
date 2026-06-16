@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.bouncycastle.crypto.digests.SHA256Digest;
 import org.bouncycastle.crypto.generators.HKDFBytesGenerator;
 import org.bouncycastle.crypto.params.HKDFParameters;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.springframework.stereotype.Service;
 
 import javax.crypto.Cipher;
@@ -42,13 +43,13 @@ public class EcdhService implements IEcdhService {
 
     @Override
     public KeyPair generateKeyPair() throws Exception {
-        KeyPairGenerator kpg = KeyPairGenerator.getInstance(EC_ALGORITHM);
+        Security.addProvider(new BouncyCastleProvider());
+        KeyPairGenerator kpg = KeyPairGenerator.getInstance(EC_ALGORITHM, "BC");
         kpg.initialize(new ECGenParameterSpec(P256_CURVE));
         KeyPair keyPair = kpg.generateKeyPair();
-        log.debug("Paire de clés éphémères ECDH générée côté serveur ✅");
+        log.debug("Paire de cles ephemeres ECDH generee cote serveur");
         return keyPair;
     }
-
     @Override
     public byte[] getPublicKeyBytes(KeyPair keyPair) {
         // Retourne le format X.509 ASN.1 standard, lisible par Flutter
@@ -57,21 +58,48 @@ public class EcdhService implements IEcdhService {
 
     @Override
     public SecretKey computeSharedAesKey(KeyPair keyPair, byte[] clientPublicKeyBytes) throws Exception {
-        // 1. Reconstruire la clé publique reçue du client Flutter
-        KeyFactory kf = KeyFactory.getInstance(EC_ALGORITHM);
-        X509EncodedKeySpec x509Spec = new X509EncodedKeySpec(clientPublicKeyBytes);
-        PublicKey clientPublicKey = kf.generatePublic(x509Spec);
+        Security.addProvider(new BouncyCastleProvider());
 
-        // 2. Initialiser l'accord de clé ECDH avec notre clé privée
-        KeyAgreement ka = KeyAgreement.getInstance(ECDH_ALGORITHM);
+        log.info("Bytes recus de Flutter : longueur={}, premier byte={}",
+                clientPublicKeyBytes.length,
+                clientPublicKeyBytes[0]);
+
+        // Reconstruction de la cle publique depuis les bytes bruts [0x04, x, y]
+        // en utilisant les classes standard Java avec BC comme provider
+        java.security.spec.ECPoint w = new java.security.spec.ECPoint(
+                new java.math.BigInteger(1, java.util.Arrays.copyOfRange(clientPublicKeyBytes, 1, 33)),
+                new java.math.BigInteger(1, java.util.Arrays.copyOfRange(clientPublicKeyBytes, 33, 65))
+        );
+
+        java.security.spec.ECParameterSpec ecSpec =
+                ((java.security.interfaces.ECPublicKey)
+                        KeyPairGenerator.getInstance("EC", "BC")
+                                .generateKeyPair().getPublic())
+                        .getParams();
+
+        // Recuperer les parametres de la courbe P-256 proprement
+        AlgorithmParameters parameters = AlgorithmParameters.getInstance("EC", "BC");
+        parameters.init(new ECGenParameterSpec(P256_CURVE));
+        java.security.spec.ECParameterSpec ecParameterSpec =
+                parameters.getParameterSpec(java.security.spec.ECParameterSpec.class);
+
+        java.security.spec.ECPublicKeySpec pubKeySpec =
+                new java.security.spec.ECPublicKeySpec(w, ecParameterSpec);
+
+        KeyFactory kf = KeyFactory.getInstance(EC_ALGORITHM, "BC");
+        PublicKey clientPublicKey = kf.generatePublic(pubKeySpec);
+
+        // Accord ECDH
+        KeyAgreement ka = KeyAgreement.getInstance(ECDH_ALGORITHM, "BC");
         ka.init(keyPair.getPrivate());
         ka.doPhase(clientPublicKey, true);
         byte[] sharedSecret = ka.generateSecret();
-        log.debug("Secret brut ECDH calculé avec succès ✅");
+        log.info("Secret partage Java (premiers 8 bytes) : {}",
+                java.util.Arrays.toString(java.util.Arrays.copyOf(sharedSecret, 8)));
 
-        // 3. Dériver une clé hautement sécurisée de 256 bits via HKDF-SHA256
         byte[] aesKeyBytes = hkdfDerive(sharedSecret, HKDF_INFO, AES_KEY_SIZE);
-        log.debug("Clé symétrique finale AES-256 dérivée par HKDF-SHA256 ✅");
+        log.info("Cle AES Java (premiers 8 bytes) : {}",
+                java.util.Arrays.toString(java.util.Arrays.copyOf(aesKeyBytes, 8)));
 
         return new SecretKeySpec(aesKeyBytes, "AES");
     }
